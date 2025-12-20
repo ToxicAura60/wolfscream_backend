@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"wolfscream/database"
-	"wolfscream/models"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lib/pq"
@@ -24,6 +23,8 @@ type CreateTableBody struct {
 }
 
 func CreateTable(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		
 	var body CreateTableBody
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -126,7 +127,7 @@ func CreateTable(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Table %s added successfully", body.Name),
+		"message": "Table added successfully",
 	})
 }
 // --------------------
@@ -139,7 +140,7 @@ func CreateTable(w http.ResponseWriter, r *http.Request) {
 func ListTables(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	query := "SELECT name, description, created_at FROM tables;"
+	query := "SELECT id, name, description FROM tables;"
 
 	rows, err := database.DB.Query(query)
 	if err != nil {
@@ -152,11 +153,17 @@ func ListTables(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	tables := []models.Table{}
+	type Data struct {
+		Id          int       `json:"id"`
+		Name        string    `json:"name"`
+		Description *string   `json:"description"`
+	}
+
+	data := []Data{}
 
 	for rows.Next() {
-		var table models.Table
-		if err := rows.Scan(&table.Name, &table.Description, &table.CreatedAt); err != nil {
+		var d Data
+		if err := rows.Scan(&d.Id, &d.Name, &d.Description); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "error",
@@ -164,7 +171,7 @@ func ListTables(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		tables = append(tables, table)
+		data = append(data, d)
 	}
 
 	 if err := rows.Err(); err != nil {
@@ -179,7 +186,7 @@ func ListTables(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "success",
-		"data": tables,
+		"data": data,
 	})
 }
 // --------------------
@@ -194,17 +201,6 @@ func DropTable(w http.ResponseWriter, r *http.Request) {
 
 	table := chi.URLParam(r, "table")
 
-	validName := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-	
-	if !validName.MatchString(table) {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": "invalid table name",
-		})
-		return
-	}
-
 	tx, err := database.DB.Begin()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -217,7 +213,7 @@ func DropTable(w http.ResponseWriter, r *http.Request) {
 
 	defer tx.Rollback()
 
-	dropQuery := fmt.Sprintf("DROP TABLE %s", table)
+	dropQuery := fmt.Sprintf("DROP TABLE %s", pq.QuoteIdentifier(table))
 	if _, err := tx.Exec(dropQuery); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -249,7 +245,7 @@ func DropTable(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Table %s dropped successfully", table),
+		"message": "Table dropped successfully",
 	})
 }
 // --------------------

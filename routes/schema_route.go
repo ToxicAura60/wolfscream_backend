@@ -9,8 +9,7 @@ import (
 
 func SchemaRoutes() chi.Router {
 	router := chi.NewRouter()
-
-
+	
 	router.With(middlewares.AuthMiddleware).Get("/", handlers.ListTables)
 	router.With(middlewares.AuthMiddleware).Post("/", handlers.CreateTable)
 	router.With(middlewares.AuthMiddleware).Delete("/{table}", handlers.DropTable)

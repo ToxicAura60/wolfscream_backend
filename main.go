@@ -14,10 +14,12 @@ import (
 )
 
 func main() {
+
 	srv := &http.Server {
 		Addr: ":8080",
 		Handler: routes.Router,
 	}
+	
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)

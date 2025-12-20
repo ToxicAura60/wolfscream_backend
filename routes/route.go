@@ -18,7 +18,11 @@ func init() {
 
 	Router.Route("/api/v1", func(router chi.Router) {
 		router.Mount("/table", SchemaRoutes())
-		router.Mount("/template", TemplateRoutes())
+		router.Mount("/message-template", TemplateRoutes())
 		router.Mount("/category", CategoryRoutes())
+		router.Mount("/scheduled-message", ScheduledMessageRoutes())
+		router.Mount("/discord", DiscordRoutes())
+		router.Mount("/rule", RuleRoutes())
+		router.Mount("/platform", PlatformRoutes())
 	})
 }

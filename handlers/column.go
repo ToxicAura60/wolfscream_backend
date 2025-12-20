@@ -203,7 +203,7 @@ func AddColumn(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Column %s added successfully", body.Name),
+		"message": "Column added successfully",
 	})
 }
 
@@ -438,7 +438,7 @@ func UpdateColumn(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Column %s updated successfully", column),
+		"message": "Column updated successfully",
 	})
 }
 
@@ -553,7 +553,7 @@ func DeleteColumn(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Column %s deleted successfully", column),
+		"message": "Column deleted successfully",
 	})
 }
 
