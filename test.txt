@@ -1,8 +1,0 @@
-export DB_HOST=127.0.0.1
-export DB_PORT=5432
-export DB_USER=postgres
-export DB_PASSWORD=310745
-export DB_NAME=wolfscream
-export DB_SSLMODE=disable
-
-export DISCORD_BOT_TOKEN=MTQzMDEzMTU1OTUwNzI5NjMyMQ.G6e_My.W8jqwOdWi-aI9Kt_pkdifyXwrGrHngklaWDsSU
