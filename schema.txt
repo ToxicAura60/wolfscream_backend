@@ -1,0 +1,89 @@
+CREATE TABLE user_defined_table (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_defined_column (
+    id SERIAL PRIMARY KEY,
+    user_defined_table_id INTEGER NOT NULL REFERENCES user_defined_table(id) ON DELETE CASCADE,
+    name VARCHAR(64) NOT NULL,
+    type VARCHAR(64) NOT NULL,
+    length INTEGER,
+    is_nullable BOOLEAN NOT NULL DEFAULT FALSE,
+    default_value TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE communication_platform (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(64) UNIQUE NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TYPE scheduled_message_schedule_type AS ENUM ('interval', 'cron');
+
+CREATE TABLE scheduled_message (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE,
+    user_defined_table_id INTEGER NOT NULL REFERENCES user_defined_table(id) ON DELETE CASCADE,
+    message TEXT NOT NULL,
+    rule TEXT NOT NULL,
+    schedule_type scheduled_message_schedule_type NOT NULL,
+    communication_platform_id INTEGER NOT NULL REFERENCES communication_platform(id) ON DELETE CASCADE,
+    description TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TYPE scheduled_message_interval_unit AS ENUM ('m', 's');
+
+CREATE TABLE scheduled_message_interval (
+    id SERIAL PRIMARY KEY,
+    scheduled_message_id INTEGER NOT NULL REFERENCES scheduled_message(id) ON DELETE CASCADE,
+    value INT NOT NULL,
+    unit scheduled_message_interval_unit NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE scheduled_message_cron (
+	id SERIAL PRIMARY KEY,
+    scheduled_message_id INTEGER NOT NULL REFERENCES scheduled_message(id) ON DELETE CASCADE,
+	minute VARCHAR(8),
+	hour  VARCHAR(8),
+	day_of_month VARCHAR(8),
+	month VARCHAR(8),
+	day_of_week VARCHAR(8),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE running_scheduled_message (
+	id SERIAL PRIMARY KEY, 
+ 	scheduled_message_id INTEGER NOT NULL UNIQUE REFERENCES scheduled_message(id) ON DELETE CASCADE,
+ 	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE scheduled_message_execution_history (
+	id SERIAL PRIMARY KEY, 
+	scheduled_message_id INTEGER NOT NULL REFERENCES scheduled_message(id) ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TYPE scheduled_message_state AS ENUM ('started', 'stopped');
+
+CREATE TABLE scheduled_message_state_history (
+	id SERIAL PRIMARY KEY, 
+	state scheduled_message_state NOT NULL,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TYPE scheduled_message_log_level AS ENUM ('INFO', 'WARN', 'ERROR');
+
+CREATE TABLE scheduled_message_log (
+	id SERIAL PRIMARY KEY, 
+	text TEXT NOT NULL,
+    level scheduled_message_log_level NOT NULL,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
