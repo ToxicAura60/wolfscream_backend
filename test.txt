@@ -5,4 +5,4 @@ export DB_PASSWORD=310745
 export DB_NAME=wolfscream
 export DB_SSLMODE=disable
 
-export DISCORD_BOT_TOKEN=MTQzMDEzMTU1OTUwNzI5NjMyMQ.G6e_My.W8jqwOdWi-aI9Kt_pkdifyXwrGrHngklaWDsSU
+export DISCORD_BOT_TOKEN=

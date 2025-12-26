@@ -6,15 +6,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"wolfscream/database"
-	"wolfscream/jobs"
+	"wolfscream/discord"
 	"wolfscream/models"
 	"wolfscream/scheduler"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/robfig/cron/v3"
 )
+
+func UpdateScheduledMessages(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+}
 
 // --------------------
 // List Scheduled Messages
@@ -66,7 +71,7 @@ func ListScheduledMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type RunningScheduledMessage struct {
-		Id *string `json:"id"`
+		Id *int `json:"id"`
 	}
 
 	type Data struct{
@@ -108,6 +113,140 @@ func ListScheduledMessages(w http.ResponseWriter, r *http.Request) {
 }
 // --------------------
 // List Scheduled Messages End
+// --------------------
+
+// --------------------
+// GetScheduledMessage
+// --------------------
+func GetScheduledMessage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	scheduledMessageName := chi.URLParam(r, "scheduled-message-name")
+
+	type ScheduledMessage struct {
+		Id           int    `json:"id"`
+		Name         string `json:"name"`
+		Description  string `json:"description"`
+		ScheduleType string `json:"schedule_type"`
+	}
+
+	type ExecutionStatistic struct {
+		SuccessCount int `json:"success_count"`
+		FailedCount  int `json:"failed_count"`
+	}
+
+	type Table struct {
+		Name string `json:"name"`
+	}
+
+	type Platform struct {
+		Name     string `json:"name"`
+		ImageUrl string `json:"image_url"`
+	}
+
+	type RunningScheduledMessage struct {
+		Id      *int       `json:"id"`
+		PrevRun *time.Time `json:"prev_run"`
+		NextRun *time.Time `json:"next_run"`
+	}
+
+	type Data struct {
+		ScheduledMessage
+		Table                   Table                   `json:"table"`
+		Platform                Platform                `json:"platform"`
+		RunningScheduledMessage RunningScheduledMessage `json:"running_scheduled_message"`
+		ExecutionHistory        ExecutionStatistic      `json:"execution_statistics"`
+	}
+
+	var data Data
+
+	query := `
+		SELECT
+			sm.id, 
+			sm.name,
+			sm.description,
+			sm.schedule_type,
+			t.name AS table_name,
+			p.name AS platform_name,
+			p.image_url,
+			rsm.id AS running_id,
+			smeh.success_count,
+			smeh.failed_count
+		FROM scheduled_messages sm
+		JOIN platforms p 
+			ON sm.platform_id = p.id
+		JOIN tables t 
+			ON sm.table_id = t.id
+		LEFT JOIN running_scheduled_messages rsm 
+			ON sm.id = rsm.scheduled_message_id
+
+		LEFT JOIN LATERAL (
+			SELECT
+				COUNT(*) FILTER (WHERE status = 'success') AS success_count,
+				COUNT(*) FILTER (WHERE status = 'failed')  AS failed_count
+			FROM scheduled_message_execution_history
+			WHERE scheduled_message_id = sm.id
+		) smeh ON true
+		WHERE sm.name = $1;
+	`
+
+	err := database.DB.
+		QueryRow(query, scheduledMessageName).
+		Scan(
+			&data.Id,
+			&data.Name,
+			&data.Description,
+			&data.ScheduleType,
+			&data.Table.Name,
+			&data.Platform.Name,
+			&data.Platform.ImageUrl,
+			&data.RunningScheduledMessage.Id,
+			&data.ExecutionHistory.SuccessCount,
+			&data.ExecutionHistory.FailedCount,
+		)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": "Scheduled message not found",
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to query scheduled message: %v", err),
+		})
+		return
+	}
+
+	if data.RunningScheduledMessage.Id != nil {
+		for _, entry := range scheduler.Cron.Entries() {
+			if entry.ID == cron.EntryID(*data.RunningScheduledMessage.Id) {
+
+				if !entry.Prev.IsZero() {
+					data.RunningScheduledMessage.PrevRun = &entry.Prev
+				}
+
+				data.RunningScheduledMessage.NextRun = &entry.Next
+				break
+			}
+		}
+	}
+
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "success",
+		"data":   data,
+	})
+}
+
+// --------------------
+// GetScheduledMessage
 // --------------------
 
 
@@ -283,28 +422,31 @@ func AddScheduledMessage(w http.ResponseWriter, r *http.Request) {
 // --------------------
 // Add Scheduled Message End
 // --------------------
-
-
-type EnableScheduledMessageBody struct {
-	ScheduledMessageId int `json:"scheduled_message_id"`
-}
-
 func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	
+	scheduledMessageName := chi.URLParam(r, "scheduled-message-name")
 
-	var body EnableScheduledMessageBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": "Invalid request body",
-		})
-		return
+	type ScheduledMessage struct {
+		Id int
+		Rule string
+		Message string
+		ScheduleType       string
 	}
-	
-	var scheduledMessageId int
-	var tableName, message, platformName, ruleText, scheduleType string
+
+	type Table struct {
+		name string
+	}
+
+	type Platform struct {
+		name string
+	}
+
+	var (
+		scheduledMessage ScheduledMessage
+		table         Table
+		platform      Platform
+	)
 
 	err := database.DB.QueryRow(`
 	SELECT 
@@ -317,14 +459,14 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 		FROM scheduled_messages sm
 		JOIN tables t ON sm.table_id = t.id
 		JOIN platforms p ON sm.platform_id = p.id
-		WHERE sm.id = $1
-	`, body.ScheduledMessageId).Scan(
-		&scheduledMessageId,
-		&scheduleType,
-		&ruleText,
-		&message,
-		&tableName,
-		&platformName,
+		WHERE sm.name = $1
+	`, scheduledMessageName).Scan(
+		&scheduledMessage.Id,
+		&scheduledMessage.ScheduleType,
+		&scheduledMessage.Rule,
+		&scheduledMessage.Message,
+		&table.name,
+		&platform.name,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -343,13 +485,17 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var config any
-	switch platformName {
+	type DiscordConfig struct {
+		ChannelId string
+	}
+	var platformConfig any
+
+	switch platform.name {
 		case "discord":
-			var discordConfig models.DiscordConfig
+			var discordConfig DiscordConfig
 			err = database.DB.QueryRow(`
-				SELECT id, scheduled_message_id, channel_id, created_at FROM discord_configs WHERE scheduled_message_id = $1
-			`, scheduledMessageId).Scan(&discordConfig.Id, &discordConfig.ScheduledMessageId, &discordConfig.ChannelId, &discordConfig.CreatedAt)
+				SELECT channel_id FROM discord_configs WHERE scheduled_message_id = $1
+			`, scheduledMessage.Id).Scan(&discordConfig.ChannelId)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -358,27 +504,37 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			config = discordConfig
+			platformConfig = discordConfig
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "error",
-				"message": "Unsupported platform: " + platformName,
+				"message": "Unsupported platform",
 			})
 			return
 		}
 
+	type Interval struct {
+		Value int
+		Unit string
+	}
+
+	type CronJob struct {
+		Minute *string
+		Hour *string
+		DayOfMonth *string
+		Month *string
+		DayOfWeek *string
+	}
 	
 	var cronSpec string
-
-	switch scheduleType {
+	switch scheduledMessage.ScheduleType {
 		case "interval":
-			var interval models.Interval
+			var interval Interval
 			err = database.DB.QueryRow(`
-				SELECT id, scheduled_message_id, value, unit, created_at
-				FROM intervals
+				SELECT value, unit FROM intervals
 				WHERE scheduled_message_id = $1
-			`, scheduledMessageId).Scan(&interval.Id, &interval.ScheduledMessageId, &interval.Value, &interval.Unit, &interval.CreatedAt)
+			`, scheduledMessage.Id).Scan(&interval.Value, &interval.Unit)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -389,12 +545,10 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 			}
 			cronSpec = fmt.Sprintf("@every %d%s", interval.Value, interval.Unit)
 		case "cronjob":
-			var cronJob models.CronJob
+			var cronJob CronJob
 			err = database.DB.QueryRow(`
-				SELECT id, scheduled_message_id, minute, hour, day_of_month, month, day_of_week, created_at
-				FROM cronjobs
-				WHERE scheduled_message_id = $1
-			`, scheduledMessageId).Scan(&cronJob.Id, &cronJob.ScheduledMessageId, &cronJob.Minute, &cronJob.Hour, &cronJob.DayOfMonth, &cronJob.Month, &cronJob.DayOfWeek, &cronJob.CreatedAt)
+				SELECT minute, hour, day_of_month, month, day_of_week FROM cronjobs WHERE scheduled_message_id = $1
+			`, scheduledMessage.Id).Scan(&cronJob.Minute, &cronJob.Hour, &cronJob.DayOfMonth, &cronJob.Month, &cronJob.DayOfWeek)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -403,11 +557,11 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			opt := func(p *int) string {
+			opt := func(p *string) string {
 				if p == nil {
 					return "*"
 				}
-				return fmt.Sprintf("%d", *p)
+				return fmt.Sprintf("%s", *p)
 			}
 			cronSpec = fmt.Sprintf("%s %s %s %s %s",
 				opt(cronJob.Minute),
@@ -425,27 +579,17 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 			return
 	}
 
-	jobFunc, ok := jobs.JobHandlers[platformName]
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": "Handler not found for platform: " + platformName,
-		})
-		return
-	}
-
-	wrappedJob := func() {
-		rows, err := database.DB.Query(fmt.Sprintf("SELECT * FROM %s", tableName))
+	sendMessage := func() {
+		rows, err := database.DB.Query(fmt.Sprintf("SELECT * FROM %s", table.name))
 		if err != nil {
 			logText := fmt.Sprintf("Failed to query table: %v", err)
-			database.DB.Exec("INSERT INTO logs (scheduled_message_id, text) VALUES ($1, $2);", scheduledMessageId, logText)
+			database.DB.Exec("INSERT INTO scheduled_message_error_logs (scheduled_message_id, text, level) VALUES ($1, $2, $3);", scheduledMessage.Id, logText, "ERROR")
 			return
 		}
 		defer rows.Close()
 
 		columns, _ := rows.Columns()
-		allMessages := []string{}
+		messages := []string{}
 
 		for rows.Next() {
 			values := make([]any, len(columns))
@@ -464,7 +608,7 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 			}
 
 			match := true
-			for _, rule := range strings.Split(ruleText, ";") {
+			for rule := range strings.SplitSeq(scheduledMessage.Rule, ";") {
 				rule = strings.TrimSpace(rule)
 				if rule == "" {
 					continue
@@ -506,24 +650,35 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			msgText := message
+			message := scheduledMessage.Message
 			for col, val := range rowMap {
-				msgText = strings.ReplaceAll(msgText, "{{"+col+"}}", fmt.Sprintf("%v", val))
+				message = strings.ReplaceAll(message, "{{"+col+"}}", fmt.Sprintf("%v", val))
 			}
 
-			allMessages = append(allMessages, msgText)
+			messages = append(messages, message)
 		}
 
-		if len(allMessages) == 0 {
+		if len(messages) == 0 {
 			return
 		}
 
-		payload := map[string]any{
-			"messages": allMessages,
-			"config": config,
-		}
+		switch platform.name {
+			case "discord":
+				config := platformConfig.(DiscordConfig)
 		
-		jobFunc(payload)
+				channelId := config.ChannelId
+
+				if _, err := discord.DiscordBot.ChannelMessageSend(channelId, strings.Join(messages, "\n\n")); err != nil {
+					logText := fmt.Sprintf("Failed to send message to channel %s: %v", channelId, err)
+					database.DB.Exec("INSERT INTO scheduled_message_error_logs (scheduled_message_id, text, level) VALUES ($1, $2);", scheduledMessage.Id, logText, "ERROR")
+					return
+				}
+		}
+		if _, err := database.DB.Exec("INSERT INTO scheduled_message_execution_history(scheduled_message_id, status) VALUES ($1, $2);", scheduledMessage.Id, "success"); err != nil {
+			fmt.Println(err)
+		}
+
+
 	}
 
 	tx, err := database.DB.Begin()
@@ -534,7 +689,7 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	cronJobId, err := scheduler.Cron.AddFunc(cronSpec, wrappedJob)
+	cronJobId, err := scheduler.Cron.AddFunc(cronSpec, sendMessage)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -544,7 +699,18 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := tx.Exec("INSERT INTO running_scheduled_messages(id, scheduled_message_id) VALUES ($1, $2);", int(cronJobId), scheduledMessageId); err != nil {
+	if _, err := tx.Exec("INSERT INTO scheduled_message_state_history(scheduled_message_id, state) VALUES ($1, $2);", scheduledMessage.Id, "started"); err != nil {
+		scheduler.Cron.Remove(cronJobId)
+
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to add column: %v", err),
+		})
+		return
+	}
+
+	if _, err := tx.Exec("INSERT INTO running_scheduled_messages(id, scheduled_message_id) VALUES ($1, $2);", int(cronJobId), scheduledMessage.Id); err != nil {
 		scheduler.Cron.Remove(cronJobId)
 
 		w.WriteHeader(http.StatusInternalServerError)
@@ -566,42 +732,30 @@ func EnableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
 		"message": "Scheduled message activated",
 	})
 }
 
-
-
-
 // --------------------
 // Disable Scheduled Message
 // --------------------
-type DisableScheduledMessageBody struct {
-	ScheduledMessageId int `json:"scheduled_message_id"`
-}
-
 func DisableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var body DisableScheduledMessageBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": "Invalid request body",
-		})
-		return
-	}
+	scheduledMessageName := chi.URLParam(r, "scheduled-message-name")
 
 	var runningScheduledMessageId int
+	var scheduledMessageId int
 	err := database.DB.QueryRow(`
-		SELECT id
-		FROM running_scheduled_messages
-		WHERE scheduled_message_id = $1
-	`, body.ScheduledMessageId).Scan(&runningScheduledMessageId)
+		SELECT 
+			sm.id,
+			rsm.id
+		FROM scheduled_messages sm
+		LEFT JOIN running_scheduled_messages rsm ON sm.id = rsm.scheduled_message_id
+		WHERE name = $1
+	`, scheduledMessageName).Scan(&scheduledMessageId, &runningScheduledMessageId)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -623,11 +777,37 @@ func DisableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 
 	scheduler.Cron.Remove(cron.EntryID(runningScheduledMessageId))
 
-	if _, err := database.DB.Exec("DELETE FROM running_scheduled_messages WHERE id = $1", runningScheduledMessageId); err != nil {
+	tx, err := database.DB.Begin()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM running_scheduled_messages WHERE id = $1", runningScheduledMessageId); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "error",
 			"message": fmt.Sprintf("Failed to remove running scheduled message: %v", err),
+		})
+		return
+	}
+
+	if _, err := tx.Exec("INSERT INTO scheduled_message_state_history(scheduled_message_id, state) VALUES ($1, $2);", scheduledMessageId, "stopped"); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to remove running scheduled message: %v", err),
+		})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "error", 
+			"message": "Failed to commit transaction",
 		})
 		return
 	}
@@ -648,19 +828,21 @@ func DisableScheduledMessage(w http.ResponseWriter, r *http.Request) {
 func FetchLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	scheduledMessageId := chi.URLParam(r, "id")
+	scheduledMessageName := chi.URLParam(r, "scheduled-message-name")
 
 	query := `
     SELECT 
-			id,
-      text,
-			level,
-			created_at
-    FROM logs WHERE scheduled_message_id = $1
-		ORDER BY created_at ASC;
+			smel.id,
+      smel.text,
+			smel.level,
+			smel.created_at
+    FROM scheduled_message_error_logs smel
+		LEFT JOIN scheduled_messages sm ON smel.scheduled_message_id = sm.id
+		WHERE sm.name = $1
+		ORDER BY smel.created_at ASC;
 		`
 
-	rows, err := database.DB.Query(query, scheduledMessageId)
+	rows, err := database.DB.Query(query, scheduledMessageName)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -705,3 +887,78 @@ func FetchLogs(w http.ResponseWriter, r *http.Request) {
 // --------------------
 // Fetch Logs End
 // --------------------
+
+func FetchStateHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	scheduledMessageName := chi.URLParam(r, "scheduled-message-name")
+
+	query := `
+		SELECT
+			id,
+			state,
+			created_at
+		FROM (
+			SELECT
+				smsh.id,
+				smsh.state,
+				smsh.created_at
+			FROM scheduled_message_state_history smsh
+			LEFT JOIN scheduled_messages sm
+				ON smsh.scheduled_message_id = sm.id
+			WHERE sm.name = $1
+			ORDER BY smsh.created_at DESC
+			LIMIT 100
+		) latest
+		ORDER BY created_at ASC;
+		`
+
+	rows, err := database.DB.Query(query, scheduledMessageName)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to query logs: %v", err),
+		})
+		return
+	}
+	defer rows.Close()
+
+	type Data struct {
+		Id        int       `json:"id"`
+		State     string    `json:"state"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	
+
+	data := []Data{}
+
+	for rows.Next() {
+		var d Data
+		if err := rows.Scan(&d.Id, &d.State, &d.CreatedAt); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": fmt.Sprintf("Failed to scan log: %v", err),
+			})
+			return
+		}
+		data = append(data, d)
+	}
+
+	if err := rows.Err(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to read rows: %v", err),
+		})
+    return
+  }
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "success",
+		"data": data,
+	})
+
+}

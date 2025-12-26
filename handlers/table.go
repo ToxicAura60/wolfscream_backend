@@ -1,11 +1,9 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"wolfscream/database"
 
@@ -19,7 +17,6 @@ import (
 type CreateTableBody struct {
 	Name string `json:"name"`
 	Description string `json:"description"`
-	Categories []string `json:"categories"`
 }
 
 func CreateTable(w http.ResponseWriter, r *http.Request) {
@@ -47,15 +44,7 @@ func CreateTable(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	parts := []string{
-		`"id" SERIAL PRIMARY KEY`,
-	}
-
-	for _, category := range body.Categories {
-		parts = append(parts, fmt.Sprintf(`%s INTEGER REFERENCES %s("id")`, pq.QuoteIdentifier(category + "_id"), pq.QuoteIdentifier(category)))
-	}
-
-	query := fmt.Sprintf(`CREATE TABLE %s (%s);`, pq.QuoteIdentifier(body.Name), strings.Join(parts, ", "))
+	query := fmt.Sprintf(`CREATE TABLE %s ();`, pq.QuoteIdentifier(body.Name))
 
 	if _, err := tx.Exec(query); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -66,54 +55,13 @@ func CreateTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tableId int
-	err = tx.QueryRow(`INSERT INTO "tables" ("name", "description") VALUES ($1, $2) RETURNING id`, body.Name, body.Description).Scan(&tableId)
-	if err != nil {
+	if _, err := tx.Exec(`INSERT INTO "tables" ("name", "description") VALUES ($1, $2);`, body.Name, body.Description); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "error",
 			"message": fmt.Sprintf("Failed to insert table: %v", err),
 		})
 		return
-	}
-
-	if len(body.Categories) > 0 {
-		rows, err := tx.Query("SELECT id FROM categories WHERE name = ANY($1)", pq.Array(body.Categories))
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": fmt.Sprintf("Failed to fetch category IDs: %v", err),
-			})
-			return
-		}
-    defer rows.Close()
-
-		var categoryIds []int
-    for rows.Next() {
-      var categoryId int
-      if err := rows.Scan(&categoryId); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{
-					"status":  "error",
-					"message": fmt.Sprintf("Failed to read category ID from database: %v", err),
-			})
-			return
-      }
-			categoryIds = append(categoryIds, categoryId)
-    }
-
-		query = `INSERT INTO tables_categories (table_id, category_id)
-            SELECT $1, UNNEST($2::int[]);`
-
-    if _, err := tx.Exec(query, tableId, pq.Array(categoryIds)); err != nil {
-      w.WriteHeader(http.StatusInternalServerError)
-      json.NewEncoder(w).Encode(map[string]string{
-        "status":  "error",
-        "message": fmt.Sprintf("Failed to insert tables_categories: %v", err),
-      })
-      return
-    }
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -260,56 +208,7 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
   table := chi.URLParam(r, "table")
 
-	query := `
-    SELECT c.name
-    FROM tables_categories tc
-    JOIN categories c ON tc.category_id = c.id
-    JOIN tables t ON t.id = tc.table_id
-    WHERE t.name = $1;
-  `
-
-	rows, err := database.DB.Query(query, table)
-  if err != nil {
-    w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": fmt.Sprintf("Failed to fetch categories: %v", err),
-		})
-    return
-  }
-  defer rows.Close()
-
-	categories := []string{}
-  for rows.Next() {
-    var category string
-    if err := rows.Scan(&category); err != nil {
-       w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": "failed to read category",
-			})
-      return
-    }
-		categories = append(categories, category)
-  }
-
-	selectParts := []string{fmt.Sprintf("%s.*", table)}
-	for _, category := range categories {
-			selectParts = append(selectParts, fmt.Sprintf("%s.name AS %s", category, category))
-	}
-
-	var joinParts []string
-	for _, category := range categories {
-		joinParts = append(joinParts, fmt.Sprintf("LEFT JOIN %s ON %s.%s_id = %s.id", category, table, category, category))
-	}
-
-	query = fmt.Sprintf(
-		"SELECT %s FROM %s %s;", 
-		strings.Join(selectParts, ", "),
-		table,
-		strings.Join(joinParts, " "),
-	)
-  rows, err = database.DB.Query(query)
+  rows, err := database.DB.Query(fmt.Sprintf("SELECT * FROM %s;", pq.QuoteIdentifier(table)))
   if err != nil {
     w.WriteHeader(http.StatusInternalServerError)
     json.NewEncoder(w).Encode(map[string]string{
@@ -349,16 +248,12 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		entry := map[string]any{}
+		rowMap := map[string]any{}
 		for i, col := range columns {
-			entry[col] = values[i]
+			rowMap[col] = values[i]
 		}
 
-		for _, category := range categories {
-			delete(entry, category+"_id")
-		}
-
-    results = append(results, entry)
+    results = append(results, rowMap)
     }
 
     w.WriteHeader(http.StatusOK)
@@ -379,16 +274,6 @@ func InsertData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	table := chi.URLParam(r, "table")
-
-	validName := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
-	if !validName.MatchString(table) {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": "Invalid table name",
-		})
-		return
-	}
 
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -420,76 +305,16 @@ func InsertData(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`
-		SELECT c.id, c.name
-		FROM tables_categories tc
-		JOIN categories c ON tc.category_id = c.id
-		JOIN tables t ON tc.table_id = t.id
-		WHERE t.name = $1
-	`, table)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": err.Error(),
-		})
-		return
-	}
-	defer rows.Close()
-
-	categories := make(map[string]int)
-	for rows.Next() {
-		var id int
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": err.Error(),
-			})
-			return
-		}
-		categories[name] = id
-	}
-
 	columns := []string{}
 	placeholders := []string{}
 	values := []any{}
 	i := 1
 
 	for key, val := range body {
-		if _, ok := categories[key]; ok {
-			columnName := fmt.Sprintf("%s_id", key)
-			var valueID int
-
-			err := tx.QueryRow(fmt.Sprintf("SELECT id FROM %s WHERE name=$1", key), val).Scan(&valueID)
-			if err == sql.ErrNoRows {
-				err = tx.QueryRow(fmt.Sprintf("INSERT INTO %s(name) VALUES($1) RETURNING id", key), val).Scan(&valueID)
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{
-						"status":  "error",
-						"message": fmt.Sprintf("Failed to insert value '%v' into category '%s'", val, key),
-					})
-					return
-				}
-			} else if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{
-					"status":  "error",
-					"message": err.Error(),
-				})
-				return
-			}
-
-			columns = append(columns, columnName)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-			values = append(values, valueID)
-		} else {
-			columns = append(columns, key)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-			values = append(values, val)
-		}
+		columns = append(columns, key)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i))
+		values = append(values, val)
+		
 		i++
 	}
 

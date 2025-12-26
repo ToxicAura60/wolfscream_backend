@@ -11,13 +11,21 @@ import (
 	"wolfscream/database"
 	"wolfscream/discord"
 	"wolfscream/routes"
+	"wolfscream/websocket"
+	websocket_handlers "wolfscream/websocket/handlers"
 )
 
 func main() {
+	websocket.InitHub()
+	websocket_handlers.InitHandlers()
+
+	r := routes.NewRouter()
+
+	r.Get("/ws", websocket.HandleWebSocket)
 
 	srv := &http.Server {
 		Addr: ":8080",
-		Handler: routes.Router,
+		Handler: r,
 	}
 	
 
