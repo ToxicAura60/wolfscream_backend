@@ -19,7 +19,7 @@ func CreateTable(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	type CreateTableBody struct {
-		Name        string `json:"name" validate:"required,snakecase"`
+		Name        string `json:"name" validate:"required,snakecase,min=1"`
 		Description string `json:"description"`
 	}
 

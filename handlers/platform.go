@@ -13,7 +13,7 @@ import (
 func ListPlatforms(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	query := "SELECT id, name, image_url FROM platforms;"
+	query := "SELECT id, name, image_url FROM communication_platform;"
 
 	rows, err := database.DB.Query(query)
 	if err != nil {
@@ -26,18 +26,17 @@ func ListPlatforms(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type Data struct {
+	type CommunicationPlatform struct {
 		Id       string `json:"id"`
 		Name     string `json:"name"`
 		ImageUrl string `json:"image_url"`
-
 	}
 
-	data := []Data{}
+	communicationPlatforms := []CommunicationPlatform{}
 
 	for rows.Next() {
-		var d Data
-		if err := rows.Scan(&d.Id, &d.Name, &d.ImageUrl); err != nil {
+		var communicationPlatform CommunicationPlatform
+		if err := rows.Scan(&communicationPlatform.Id, &communicationPlatform.Name, &communicationPlatform.ImageUrl); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "error",
@@ -45,7 +44,7 @@ func ListPlatforms(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		data = append(data, d)
+		communicationPlatforms = append(communicationPlatforms, communicationPlatform)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -54,15 +53,16 @@ func ListPlatforms(w http.ResponseWriter, r *http.Request) {
 			"status":  "error",
 			"message": fmt.Sprintf("Failed to read rows: %v", err),
 		})
-    return
-  }
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "success",
-		"data": data,
+		"status": "success",
+		"data":   communicationPlatforms,
 	})
 }
+
 // --------------------
 // List Platforms End
 // --------------------

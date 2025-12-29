@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"wolfscream/database"
-	"wolfscream/models"
+	"wolfscream/validator"
 )
 
 // --------------------
@@ -14,31 +14,29 @@ import (
 func ListRules(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	query := "SELECT id, name, description, text FROM rules;"
-
-	rows, err := database.DB.Query(query)
+	rows, err := database.DB.Query("SELECT id, name, description, rule FROM scheduled_message_rule ORDER BY created_at ASC;")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "error",
-			"message": fmt.Sprintf("Failed to query columns: %v", err),
+			"message": fmt.Sprintf("Failed to query rules: %v", err),
 		})
 		return
 	}
 	defer rows.Close()
 
-	type Data struct {
-		Id          int       `json:"id"`
-		Name        string    `json:"name"`
-		Description *string   `json:"description"`
-		Text        string    `json:"text"`
+	type ScheduledMessageRule struct {
+		Id          int     `json:"id"`
+		Name        string  `json:"name"`
+		Description *string `json:"description"`
+		Rule        string  `json:"rule"`
 	}
 
-	data := []Data{}
+	scheduledMessageRules := []ScheduledMessageRule{}
 
 	for rows.Next() {
-		var d Data
-		if err := rows.Scan(&d.Id, &d.Name, &d.Description, &d.Text); err != nil {
+		var scheduledMessageRule ScheduledMessageRule
+		if err := rows.Scan(&scheduledMessageRule.Id, &scheduledMessageRule.Name, &scheduledMessageRule.Description, &scheduledMessageRule.Rule); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "error",
@@ -46,7 +44,7 @@ func ListRules(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		data = append(data, d)
+		scheduledMessageRules = append(scheduledMessageRules, scheduledMessageRule)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -55,15 +53,16 @@ func ListRules(w http.ResponseWriter, r *http.Request) {
 			"status":  "error",
 			"message": fmt.Sprintf("Failed to read rows: %v", err),
 		})
-    return
-  }
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "success",
-		"data": data,
+		"status": "success",
+		"data":   scheduledMessageRules,
 	})
 }
+
 // --------------------
 // List Rules End
 // --------------------
@@ -74,7 +73,13 @@ func ListRules(w http.ResponseWriter, r *http.Request) {
 func AddRule(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var body models.Rule
+	type AddRuleBody struct {
+		Name        string  `json:"name" validate:"required,snakecase,min=1"`
+		Description *string `json:"description"`
+		Rule        string  `json:"rule" validate:"required"`
+	}
+
+	var body AddRuleBody
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -85,8 +90,17 @@ func AddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := "INSERT INTO rules(name, text, description) VALUES ($1, $2, $3);"
-	if _, err := database.DB.Exec(query, body.Name, body.Text, body.Description); err != nil {
+	if err := validator.Validate.Struct(body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"errors": validator.FormatError(err),
+		})
+		return
+	}
+
+	query := "INSERT INTO scheduled_message_rule(name, rule, description) VALUES ($1, $2, $3);"
+	if _, err := database.DB.Exec(query, body.Name, body.Rule, body.Description); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "error",

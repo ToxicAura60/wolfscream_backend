@@ -58,6 +58,14 @@ CREATE TABLE scheduled_message_cron (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE scheduled_message_rule (
+	id SERIAL PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE,
+	description TEXT,
+    rule TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE running_scheduled_message (
 	id SERIAL PRIMARY KEY, 
  	scheduled_message_id INTEGER NOT NULL UNIQUE REFERENCES scheduled_message(id) ON DELETE CASCADE,
